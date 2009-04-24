@@ -1,0 +1,237 @@
+#!/usr/bin/env python
+# rsget -- Q&D RapidShare file downloader
+from __future__ import with_statement
+# You may change the above variables with your rapidshare's user and password
+_user = ""
+_pass = ""
+
+# Globals
+_threads = 0
+_limit   = 0
+_update_interval = 3
+
+import sys, getopt, re, base64, Queue, threading, time, signal
+try:
+    from urlgrabber import urlread, urlgrab
+except:
+    print 'You first need to install URLGRabber:'
+    print '\t wget http://linux.duke.edu/projects/urlgrabber/download/urlgrabber-3.1.0.tar.gz'
+    print '\t tar zxf urlgrabber-3.1.0.tar.gz'
+    print '\t cd urlgrabber-3.1.0'
+    print '\t python setup.py build'
+    print '\t sudo python setup.py install'
+    sys.exit(1)
+
+def bytes_to_human(bytes):
+    _abbrevs = [
+        (2 ** 30L - 1, 'G'),
+        (2 ** 20L - 1, 'M'),
+        (2 ** 10L - 1, 'K'),
+        (1, '')
+        ] 
+    for factor, suffix in _abbrevs:
+        if bytes > factor:
+            break
+    return "%.2f%sB" % (((bytes*1.0)/(factor*1.0)), suffix)
+
+def createThread(target_funcion):
+    t = threading.Thread(target=target_funcion)
+    t.setDaemon(True)
+    t.start()
+    return t
+
+# from: http://code.activestate.com/recipes/168639/
+class ProgressBar:
+    def __init__(self, minValue = 0, maxValue = 10, totalWidth=12):
+        self.progBar = "[]"   # This holds the progress bar string
+        self.min = minValue
+        self.max = maxValue
+        self.span = maxValue - minValue
+        self.width = totalWidth
+        self.amount = 0       # When amount == max, we are 100% done 
+        self.updateAmount(0)  # Build progress bar string
+        
+    def updateAmount(self, newAmount = 0):
+        if newAmount < self.min: newAmount = self.min
+        if newAmount > self.max: newAmount = self.max
+        self.amount = newAmount
+        # Figure out the new percent done, round to an integer
+        diffFromMin = float(self.amount - self.min)
+        percentDone = (diffFromMin / float(self.span)) * 100.0
+        percentDone = round(percentDone)
+        percentDone = int(percentDone)
+        # Figure out how many hash bars the percentage should be
+        allFull = self.width - 2
+        numHashes = (percentDone / 100.0) * allFull
+        numHashes = int(round(numHashes))
+        # build a progress bar with hashes and spaces
+        self.progBar = "[" + '#'*numHashes + ' '*(allFull-numHashes) + "]"
+        # figure out where to put the percentage, roughly centered
+        percentPlace = (len(self.progBar) / 2) - len(str(percentDone)) 
+        percentString = str(percentDone) + "%"
+        # slice the percentage into the bar
+        self.progBar = self.progBar[0:percentPlace] + percentString + self.progBar[percentPlace+len(percentString):]
+
+    def __str__(self):
+        return str(self.progBar)
+
+class ProgressMonitor:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.progress = []
+        self.lastdone = 0
+
+    def addProgress(self, progress):
+        with self.lock:
+            self.progress.append(progress)
+
+    def printStatus(self):
+        with self.lock:
+            total_onqueue = q.qsize()
+            total_files = len(self.progress) + total_onqueue
+            done_files = len(filter(lambda x: x.done, self.progress))
+            total_bytes = sum(map(lambda x: x.length, self.progress))
+            done_bytes = sum(map(lambda x: x.total, self.progress))
+
+            bytes_per_second = ((done_bytes - self.lastdone) * 1.0 / (_update_interval * 1.0))
+            self.lastdone = done_bytes
+
+            if total_bytes == 0:
+                sys.stdout.write("starting...\r")
+            else:
+                prog = ProgressBar(0, total_bytes, 40)
+                prog.updateAmount(done_bytes)
+                str = "%02d/%02d (%d queued) %s %s/sec      \r" % (done_files, total_files, total_onqueue, prog, bytes_to_human(bytes_per_second))
+                sys.stdout.write(str)
+            sys.stdout.flush()
+
+progressMonitor = ProgressMonitor()
+def progressPrinter():
+    while True:
+        progressMonitor.printStatus()
+        time.sleep(_update_interval)
+
+class Progress:
+    def __init__(self):
+        self.done = False
+        self.total = 0
+        self.length = 0
+        progressMonitor.addProgress(self)
+
+    def start(self, filename, url, basename, length, text):
+        self.filename = filename
+        self.url = url
+        self.basename = basename
+        self.length = length
+        self.text = text
+
+    def update(self, read):
+        self.total = read
+
+    def end(self, amount_read):
+        self.total = amount_read
+        self.done = True
+
+q = Queue.Queue(0)
+def worker(): 
+    while True: 
+        item = q.get()
+        rsgrab(item) 
+        q.task_done()
+
+def grab(url):
+    userpass = "%s:%s" % (_user, _pass)
+    authline = "Basic %s" % base64.b64encode(userpass)
+    headers  = (('Authorization', authline),)
+    try:
+        urlgrab(url, None, http_headers=headers, data='sl.data=PREMIUM', 
+                progress_obj=Progress(), reget='simple', throttle=_limit)
+    except Exception, ex:
+        print 'grab error downloading [%s]: %s' % (url, ex)
+
+def rsgrab(url):
+    try:
+        data = urlread(url)
+        realurl = re.search("<form action=\"(\S+)\" method=\"post\"", data).group(1)
+        grab(realurl)
+    except:
+        print 'error downloading [%s]' % url
+
+def get_url_list(file, url):
+    urllist = []
+    if file != "":
+        try:
+            with open(file, 'r') as f:
+                urllist = f.readlines()
+        except:
+            print 'error reading file %s' % file
+            sys.exit(3)
+    if url != "":
+        urllist.append(url)
+    urllist = map(lambda x: x.strip(), urllist)
+    return filter(lambda x: x != "" and not x.startswith("#"), urllist)
+
+def download(urllist):
+    for u in urllist:
+        if not u.strip() == "": q.put(u.strip())
+    q.join()
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+def usage():
+    print '%s options:' % sys.argv[0]
+    print '    -h\t\tprints this help'
+    print '    -f <file>\tfile with urls'
+    print '    -u <url>\ta url to download'
+    print '    -t <num>\tnumber of threads to use (default = number of files to download)'
+    print '    -l <num>\tthe total bandwidth limit (KB/second, default = 0 [unlimited])'
+    print '    -U <str>\trapidshare username'
+    print '    -P <str>\trapidshare password'
+
+def main(args):
+    file = ""
+    url  = ""
+    try:
+        optlist, args = getopt.getopt(args, 'hf:u:t:l:U:P:')
+    except getopt.GetoptError:
+        usage()
+        sys.exit(2)
+    for opt, arg in optlist:
+        if opt in ('-h', '--help'):
+            usage()
+            sys.exit()
+        elif opt in ('-f', '--file'):
+            file = arg
+        elif opt in ('-u', '--url'):
+            url = arg
+        elif opt in ('-t', '--threads'):
+            global _threads
+            _threads = int(arg)
+        elif opt in ('-l', '--limit'):
+            global _limit
+            _limit = 1024 * int(arg)
+        elif opt in ('-U', '--user'):
+            global _user
+            _user = arg
+        elif opt in ('-P', '--pass'):
+            global _pass
+            _pass = arg
+    if file == "" and url == "":
+        usage()
+        sys.exit(2)
+    urllist = get_url_list(file, url)
+    if len(urllist) == 0:
+        print "Nothing to download. Exiting."
+        sys.exit(0)
+    if _threads == 0:
+        _threads = len(urllist)
+    if _limit != 0:
+        _limit = _limit / _threads
+    for i in range(_threads):
+        createThread(worker)
+    createThread(progressPrinter)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    download(urllist)
+            
+if __name__ == "__main__":
+    main(sys.argv[1:])
