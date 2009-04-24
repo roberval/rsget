@@ -14,8 +14,8 @@ Configuring rsget
 
 Just set your user and password:
    
-   _user = ""
-   _pass = ""
+    _user = ""
+    _pass = ""
 
 Using rsget
 -----------
