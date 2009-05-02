@@ -29,4 +29,4 @@ rsget options:
     -U <str>	rapidshare username
     -P <str>	rapidshare password
 
-The file with urls accept comments (lines starting with #)
+The file with urls accept comments (lines starting with #).
