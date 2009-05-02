@@ -23,6 +23,7 @@ Using rsget
 rsget options:
 
     -f <file>	file with urls
+    -d <directory>	target directory
     -u <url>	a url to download
     -t <num>	number of threads to use (default = number of files to download)
     -l <num>	the total bandwidth limit (KB/second, default = 0 [unlimited])
