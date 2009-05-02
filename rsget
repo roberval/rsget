@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # rsget -- Q&D RapidShare file downloader
 from __future__ import with_statement
 # You may change the above variables with your rapidshare's user and password
@@ -9,10 +10,12 @@ _pass = ""
 _threads = 0
 _limit   = 0
 _update_interval = 3
+_directory = ""
 
-import sys, getopt, re, base64, Queue, threading, time, signal
+import sys, getopt, re, base64, Queue, threading, time, signal, os, urllib, shutil
 try:
     from urlgrabber import urlread, urlgrab
+    from urlgrabber.grabber import URLParser, URLGrabberOptions
 except:
     print 'You first need to install URLGRabber:'
     print '\t wget http://linux.duke.edu/projects/urlgrabber/download/urlgrabber-3.1.0.tar.gz'
@@ -150,12 +153,26 @@ def grab(url):
         print 'grab error downloading [%s]: %s' % (url, ex)
 
 def rsgrab(url):
+    global _directory
     try:
         data = urlread(url)
         realurl = re.search("<form action=\"(\S+)\" method=\"post\"", data).group(1)
         grab(realurl)
+
+        try:
+            if _directory != "" and os.path.isdir(_directory):
+                urlparser = URLParser()
+                opts = URLGrabberOptions()
+                (url_, parts) = urlparser.parse(url,opts)
+                (scheme, host, path, parm, query, frag) = parts
+                filename = os.path.basename( urllib.unquote(path) )
+                shutil.move(filename,_directory )
+        except Exception, ex:
+            print 'error moving [%s] to [%s]' % (filename,_directory)
+                
     except:
-        print 'error downloading [%s]' % url
+        print 'error downloading 1 [%s]' % url
+
 
 def get_url_list(file, url):
     urllist = []
@@ -178,10 +195,22 @@ def download(urllist):
     sys.stdout.write("\n")
     sys.stdout.flush()
 
+def checkdir():
+    global _directory
+    print _directory
+    if _directory != "":
+        try:
+            if not os.path.exists(_directory):
+                os.makedirs(_directory)
+        except:
+            print 'error creating directory %s' % _directory
+            sys.exit(3)
+
 def usage():
     print '%s options:' % sys.argv[0]
     print '    -h\t\tprints this help'
     print '    -f <file>\tfile with urls'
+    print '    -d <directory>\ttarget directory'
     print '    -u <url>\ta url to download'
     print '    -t <num>\tnumber of threads to use (default = number of files to download)'
     print '    -l <num>\tthe total bandwidth limit (KB/second, default = 0 [unlimited])'
@@ -191,8 +220,9 @@ def usage():
 def main(args):
     file = ""
     url  = ""
+    directory  = ""
     try:
-        optlist, args = getopt.getopt(args, 'hf:u:t:l:U:P:')
+        optlist, args = getopt.getopt(args, 'hf:u:t:l:U:P:d:')
     except getopt.GetoptError:
         usage()
         sys.exit(2)
@@ -202,6 +232,9 @@ def main(args):
             sys.exit()
         elif opt in ('-f', '--file'):
             file = arg
+        elif opt in ('-d', '--directory'):
+            global _directory
+            _directory = arg
         elif opt in ('-u', '--url'):
             url = arg
         elif opt in ('-t', '--threads'):
@@ -231,6 +264,7 @@ def main(args):
         createThread(worker)
     createThread(progressPrinter)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
+    checkdir()
     download(urllist)
             
 if __name__ == "__main__":
